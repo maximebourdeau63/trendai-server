@@ -39,8 +39,7 @@ app.post('/analyze', async (req, res) => {
         model: 'llama-3.3-70b-versatile',
         messages: [
           { role: 'system', content: 'Tu es un expert TikTok. Tu réponds UNIQUEMENT avec un objet JSON valide, sans backticks, sans explication.' },
-          { role: 'user', content: `Analyse cette vidéo TikTok virale.\nTexte: "${transcript}"\nAuteur: @${author}\n${imageAnalysis ? `Style visuel: ${imageAnalysis}` : ''}\n\nRéponds avec ce JSON:\n{"style_visuel":"description précise du style","runway_prompt":"prompt anglais TRÈS détaillé et fidèle au style visuel original, couleurs ambiance cadrage éclairage, max 120 mots","analyse":"pourquoi ca cartonne 2 phrases","voix_instructions":"ton rythme emotion"}` }
-        ],
+         { role: 'user', content: `Tu es un expert en création de contenu TikTok et en génération vidéo IA.\n\nVidéo TikTok virale à recréer:\nTexte dit dans la vidéo: "${transcript}"\nAuteur: @${author}\n${imageAnalysis ? `Style visuel détecté: ${imageAnalysis}` : ''}\n\nGénère un prompt Runway ML TRÈS détaillé pour recréer visuellement cette vidéo. Le prompt doit décrire précisément: le type de shot (selfie, face cam, plan large...), l'éclairage (naturel, LED, studio...), l'ambiance (détendu, professionnel, drôle...), les couleurs dominantes, le décor, le style vestimentaire probable, les mouvements de caméra, le rythme visuel. Inspiré du texte et du contexte.\n\nRéponds avec ce JSON:\n{"style_visuel":"description précise du style en français","runway_prompt":"prompt anglais ultra détaillé pour Runway ML, minimum 80 mots, très fidèle au style TikTok original","analyse":"pourquoi ca cartonne 2 phrases","voix_instructions":"ton rythme emotion pour la voix off"}` }
         temperature: 0.5,
         max_tokens: 1000
       })
