@@ -1,3 +1,4 @@
+
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
@@ -17,17 +18,30 @@ app.post('/analyze', async (req, res) => {
       body: JSON.stringify({
         contents: [{
           parts: [{
-            text: `Analyse cette vidéo TikTok virale.\nTexte: "${transcript}"\nAuteur: @${author}\n\nRéponds UNIQUEMENT en JSON sans markdown ni backticks:\n{"style_visuel":"description 2 phrases","runway_prompt":"prompt anglais Runway ML vidéo similaire visuellement différente max 80 mots","analyse":"pourquoi ça cartonne 2 phrases","voix_instructions":"ton rythme émotion pour ElevenLabs"}`
+            text: `Tu es un expert TikTok. Analyse cette vidéo virale.\nTexte: "${transcript}"\nAuteur: @${author}\n\nRéponds avec UNIQUEMENT un objet JSON valide, rien d'autre, pas de backticks, pas d'explication:\n{"style_visuel":"description 2 phrases","runway_prompt":"prompt anglais Runway max 80 mots","analyse":"pourquoi ca cartonne 2 phrases","voix_instructions":"ton rythme emotion ElevenLabs"}`
           }]
         }],
-        generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
+        generationConfig: {
+          temperature: 0.5,
+          maxOutputTokens: 800,
+          responseMimeType: "application/json"
+        }
       })
     });
+
     const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const clean = text.replace(/```json|```/g, '').trim();
-    res.json(JSON.parse(clean));
+    console.log('Gemini raw:', JSON.stringify(data).slice(0, 500));
+
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    console.log('Raw text:', raw.slice(0, 300));
+
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('Pas de JSON trouvé dans la réponse Gemini');
+
+    const parsed = JSON.parse(match[0]);
+    res.json(parsed);
   } catch (e) {
+    console.error('Erreur:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
