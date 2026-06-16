@@ -7,7 +7,7 @@ app.use(cors());
 app.use(express.json());
 
 const GROQ_KEY = process.env.GROQ_API_KEY;
-const ELEVENLABS_KEY = process.env.ELEVENLABS_API_KEY;
+const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const PORT = process.env.PORT || 10000;
 
 app.post('/analyze', async (req, res) => {
@@ -20,7 +20,7 @@ app.post('/analyze', async (req, res) => {
         model: 'llama-3.3-70b-versatile',
         messages: [
           { role: 'system', content: 'Tu es un expert TikTok. Tu réponds UNIQUEMENT avec un objet JSON valide, sans backticks, sans explication.' },
-          { role: 'user', content: `Analyse cette vidéo TikTok virale.\nTexte: "${transcript}"\nAuteur: @${author}\n\nRéponds avec ce JSON:\n{"style_visuel":"description 2 phrases","runway_prompt":"prompt anglais Runway max 80 mots","analyse":"pourquoi ca cartonne 2 phrases","voix_instructions":"ton rythme emotion ElevenLabs"}` }
+          { role: 'user', content: `Analyse cette vidéo TikTok virale.\nTexte: "${transcript}"\nAuteur: @${author}\n\nRéponds avec ce JSON:\n{"style_visuel":"description 2 phrases","runway_prompt":"prompt anglais Runway max 80 mots","analyse":"pourquoi ca cartonne 2 phrases","voix_instructions":"ton rythme emotion"}` }
         ],
         temperature: 0.5,
         max_tokens: 800
@@ -40,13 +40,13 @@ app.post('/analyze', async (req, res) => {
 app.post('/voice', async (req, res) => {
   try {
     const { text } = req.body;
-    const response = await fetch('https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM', {
+    const response = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
-      headers: { 'xi-api-key': ELEVENLABS_KEY, 'content-type': 'application/json' },
+      headers: { 'authorization': `Bearer ${OPENAI_KEY}`, 'content-type': 'application/json' },
       body: JSON.stringify({
-        text: text.slice(0, 500),
-        model_id: 'eleven_multilingual_v2',
-        voice_settings: { stability: 0.5, similarity_boost: 0.8 }
+        model: 'tts-1',
+        input: text.slice(0, 1000),
+        voice: 'nova'
       })
     });
     if (!response.ok) {
