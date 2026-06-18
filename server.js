@@ -1,12 +1,13 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
-const { execSync, exec } = require('child_process');
+const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 ffmpeg.setFfmpegPath(ffmpegPath);
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -60,6 +61,55 @@ async function domoTransform(videoPath, model) {
   throw new Error('DomoAI timeout');
 }
 
+function cutVideo(inputPath, outputPath, start, duration) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .setStartTime(start)
+      .setDuration(duration)
+      .output(outputPath)
+      .videoCodec('libx264')
+      .audioCodec('aac')
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+}
+
+function getVideoDuration(inputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+      if (err) reject(err);
+      else resolve(metadata.format.duration);
+    });
+  });
+}
+
+function mergeVideos(listPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg()
+      .input(listPath)
+      .inputOptions(['-f concat', '-safe 0'])
+      .outputOptions('-c copy')
+      .output(outputPath)
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+}
+
+function addAudio(videoPath, audioPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg()
+      .input(videoPath)
+      .input(audioPath)
+      .outputOptions(['-map 0:v', '-map 1:a', '-c:v copy', '-c:a aac', '-shortest'])
+      .output(outputPath)
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+}
+
 app.post('/cartoon/start', async (req, res) => {
   const jobId = Date.now().toString();
   const jobDir = path.join(TMP, jobId);
@@ -67,46 +117,38 @@ app.post('/cartoon/start', async (req, res) => {
 
   res.json({ job_id: jobId });
 
-  // Process in background
   (async () => {
     try {
       const { video_url, model } = req.body;
       console.log('Starting job:', jobId);
 
-      // Download video
       const videoRes = await fetch(video_url);
       const videoBuffer = await videoRes.buffer();
       const inputPath = path.join(jobDir, 'input.mp4');
       fs.writeFileSync(inputPath, videoBuffer);
       console.log('Video downloaded:', videoBuffer.length, 'bytes');
 
-      // Get duration
-      const durationOut = execSync(`ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${inputPath}"`).toString().trim();
-      const duration = parseFloat(durationOut);
+      const duration = await getVideoDuration(inputPath);
       console.log('Video duration:', duration, 's');
 
-      // Cut into 10s segments
       const segments = [];
       const segmentDuration = 9;
       let start = 0;
       let segIdx = 0;
       while (start < duration) {
         const segPath = path.join(jobDir, `seg_${segIdx}.mp4`);
-        execSync(`ffmpeg -i "${inputPath}" -ss ${start} -t ${segmentDuration} -c:v libx264 -c:a aac -y "${segPath}"`);
+        await cutVideo(inputPath, segPath, start, segmentDuration);
         segments.push(segPath);
         start += segmentDuration;
         segIdx++;
       }
       console.log('Segments created:', segments.length);
 
-      // Transform each segment
       const cartoonSegments = [];
       for (let i = 0; i < segments.length; i++) {
         console.log(`Transforming segment ${i+1}/${segments.length}`);
         const cartoonUrl = await domoTransform(segments[i], model);
         if (!cartoonUrl) throw new Error(`No URL for segment ${i+1}`);
-
-        // Download cartoon segment
         const cartoonRes = await fetch(cartoonUrl);
         const cartoonBuf = await cartoonRes.buffer();
         const cartoonPath = path.join(jobDir, `cartoon_${i}.mp4`);
@@ -115,17 +157,14 @@ app.post('/cartoon/start', async (req, res) => {
         console.log(`Segment ${i+1} done`);
       }
 
-      // Merge cartoon segments with original audio
       const listPath = path.join(jobDir, 'list.txt');
       fs.writeFileSync(listPath, cartoonSegments.map(p => `file '${p}'`).join('\n'));
-      const mergedVideoPath = path.join(jobDir, 'merged_video.mp4');
-      execSync(`ffmpeg -f concat -safe 0 -i "${listPath}" -c copy -y "${mergedVideoPath}"`);
+      const mergedPath = path.join(jobDir, 'merged.mp4');
+      await mergeVideos(listPath, mergedPath);
 
-      // Add original audio
       const finalPath = path.join(jobDir, 'final.mp4');
-      execSync(`ffmpeg -i "${mergedVideoPath}" -i "${inputPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest -y "${finalPath}"`);
+      await addAudio(mergedPath, inputPath, finalPath);
 
-      // Save result
       fs.writeFileSync(path.join(jobDir, 'status.json'), JSON.stringify({ status: 'done', path: finalPath }));
       console.log('Job complete:', jobId);
     } catch(e) {
