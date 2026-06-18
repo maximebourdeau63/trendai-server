@@ -4,7 +4,9 @@ const fetch = require('node-fetch');
 const { execSync, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
+ffmpeg.setFfmpegPath(ffmpegPath);
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
