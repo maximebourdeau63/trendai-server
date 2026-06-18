@@ -1,12 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '100mb' }));
 
 const GROQ_KEY = process.env.GROQ_API_KEY;
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
@@ -23,17 +21,16 @@ app.post('/analyze', async (req, res) => {
           method: 'POST',
           headers: { 'authorization': `Bearer ${OPENAI_KEY}`, 'content-type': 'application/json' },
           body: JSON.stringify({
-            model: 'gpt-4o',
-            max_tokens: 300,
+            model: 'gpt-4o', max_tokens: 300,
             messages: [{ role: 'user', content: [
               { type: 'image_url', image_url: { url: cover } },
-              { type: 'text', text: 'Décris précisément le style visuel de cette vidéo TikTok: couleurs dominantes, ambiance, cadrage, style vestimentaire, décor, éclairage. Sois très précis en 3-4 phrases.' }
+              { type: 'text', text: 'Décris précisément le style visuel: couleurs, ambiance, cadrage, décor, éclairage en 3-4 phrases.' }
             ]}]
           })
         });
         const vd = await visionRes.json();
         imageAnalysis = vd.choices?.[0]?.message?.content || '';
-      } catch(e) { console.log('Vision error:', e.message); }
+      } catch(e) {}
     }
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -41,20 +38,18 @@ app.post('/analyze', async (req, res) => {
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: 'Tu es un expert TikTok. Tu réponds UNIQUEMENT avec un objet JSON valide, sans backticks, sans explication.' },
-          { role: 'user', content: `Analyse cette vidéo TikTok virale.\nTexte: "${transcript}"\nAuteur: @${author}\n${imageAnalysis ? `Style visuel: ${imageAnalysis}` : ''}\n\nRéponds avec ce JSON:\n{"style_visuel":"description précise","cartoon_prompt":"prompt anglais pour transformer en cartoon Family Guy style, thick black outlines, cel shading, vibrant colors, expressive funny face, comedy, minimum 50 mots","analyse":"pourquoi ca cartonne 2 phrases","voix_instructions":"ton rythme emotion"}` }
+          { role: 'system', content: 'Tu es un expert TikTok. Tu réponds UNIQUEMENT avec un objet JSON valide, sans backticks.' },
+          { role: 'user', content: `Analyse cette vidéo TikTok.\nTexte: "${transcript}"\nAuteur: @${author}\n${imageAnalysis ? `Style: ${imageAnalysis}` : ''}\n\nJSON:\n{"style_visuel":"description","cartoon_prompt":"Family Guy 2D cartoon animation style, thick black outlines, cel shading, vibrant colors, expressive funny face, comedy, describe the scene precisely in english min 50 words","analyse":"pourquoi ca cartonne","voix_instructions":"ton rythme"}` }
         ],
-        temperature: 0.5,
-        max_tokens: 1000
+        temperature: 0.5, max_tokens: 1000
       })
     });
     const data = await response.json();
     const raw = data.choices?.[0]?.message?.content || '';
     const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('Pas de JSON: ' + raw.slice(0,100));
+    if (!match) throw new Error('Pas de JSON');
     res.json(JSON.parse(match[0]));
   } catch(e) {
-    console.error('Analyze error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -67,43 +62,49 @@ app.post('/voice', async (req, res) => {
       headers: { 'authorization': `Bearer ${OPENAI_KEY}`, 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'tts-1', input: text.slice(0, 1000), voice: 'nova' })
     });
-    if (!response.ok) { const err = await response.json(); throw new Error(JSON.stringify(err)); }
+    if (!response.ok) throw new Error(await response.text());
     const buffer = await response.buffer();
     res.set('Content-Type', 'audio/mpeg');
     res.send(buffer);
   } catch(e) {
-    console.error('Voice error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
 app.post('/cartoon', async (req, res) => {
   try {
-    const { video_url, prompt } = req.body;
-    const startRes = await fetch('https://api.domoai.app/v1/video/style', {
+    const { video_base64, prompt } = req.body;
+
+    const startRes = await fetch('https://api.domoai.com/v1/video/video2video', {
       method: 'POST',
-      headers: { 'authorization': `Bearer ${DOMO_KEY}`, 'content-type': 'application/json' },
+      headers: { 'Authorization': `Bearer ${DOMO_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        input_url: video_url,
+        model: 'illustration-v2',
         prompt: prompt || 'Family Guy 2D cartoon animation style, thick black outlines, cel shading, vibrant colors, expressive funny face, comedy',
-        style_id: 'cartoon',
-        output_format: 'mp4'
+        video: { bytes_base64_encoded: video_base64 },
+        seconds: 10
       })
     });
+
     if (!startRes.ok) {
       const err = await startRes.json();
       throw new Error(JSON.stringify(err));
     }
+
     const startData = await startRes.json();
-    const jobId = startData.job_id || startData.id;
+    const taskId = startData.data?.task_id;
+
     for (let i = 0; i < 30; i++) {
       await new Promise(r => setTimeout(r, 5000));
-      const pollRes = await fetch(`https://api.domoai.app/v1/jobs/${jobId}`, {
-        headers: { 'authorization': `Bearer ${DOMO_KEY}` }
+      const pollRes = await fetch(`https://api.domoai.com/v1/task?task_id=${taskId}`, {
+        headers: { 'Authorization': `Bearer ${DOMO_KEY}` }
       });
       const pollData = await pollRes.json();
-      if (pollData.status === 'completed') return res.json({ url: pollData.output_url });
-      if (pollData.status === 'failed') throw new Error('DomoAI generation failed');
+      console.log('Poll status:', pollData.data?.state);
+      if (pollData.data?.state === 'success') {
+        return res.json({ url: pollData.data?.output_url || pollData.data?.video_url });
+      }
+      if (pollData.data?.state === 'failed') throw new Error('DomoAI failed');
     }
     throw new Error('Timeout');
   } catch(e) {
