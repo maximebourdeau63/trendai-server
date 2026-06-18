@@ -1,12 +1,14 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
-ffmpeg.setFfmpegPath(ffmpegPath);
+const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
+
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+ffmpeg.setFfprobePath(ffprobeInstaller.path);
 
 const app = express();
 app.use(cors());
@@ -61,6 +63,15 @@ async function domoTransform(videoPath, model) {
   throw new Error('DomoAI timeout');
 }
 
+function getVideoDuration(inputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+      if (err) reject(err);
+      else resolve(metadata.format.duration);
+    });
+  });
+}
+
 function cutVideo(inputPath, outputPath, start, duration) {
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
@@ -72,15 +83,6 @@ function cutVideo(inputPath, outputPath, start, duration) {
       .on('end', resolve)
       .on('error', reject)
       .run();
-  });
-}
-
-function getVideoDuration(inputPath) {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(inputPath, (err, metadata) => {
-      if (err) reject(err);
-      else resolve(metadata.format.duration);
-    });
   });
 }
 
@@ -114,7 +116,6 @@ app.post('/cartoon/start', async (req, res) => {
   const jobId = Date.now().toString();
   const jobDir = path.join(TMP, jobId);
   fs.mkdirSync(jobDir);
-
   res.json({ job_id: jobId });
 
   (async () => {
