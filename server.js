@@ -48,7 +48,7 @@ app.post('/cartoon/start', async (req, res) => {
 app.get('/cartoon/status/:taskId', async (req, res) => {
   try {
     const { taskId } = req.params;
-    const pollRes = await fetch(`https://api.domoai.com/v1/task?task_id=${taskId}`, {
+    const pollRes = await fetch(`https://api.domoai.com/v1/tasks/${taskId}`, {
       headers: { 'Authorization': `Bearer ${DOMO_KEY}` }
     });
     const pollData = await pollRes.json();
