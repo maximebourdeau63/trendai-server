@@ -1,6 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
+const { execSync, exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(cors());
@@ -8,65 +11,144 @@ app.use(express.json({ limit: '10mb' }));
 
 const DOMO_KEY = process.env.DOMO_API_KEY;
 const PORT = process.env.PORT || 10000;
+const TMP = '/tmp/trendai';
 
-app.post('/cartoon/start', async (req, res) => {
-  try {
-    const { video_url, model } = req.body;
+if (!fs.existsSync(TMP)) fs.mkdirSync(TMP, { recursive: true });
 
-    const videoRes = await fetch(video_url);
-    const videoBuffer = await videoRes.buffer();
-    const videoBase64 = videoBuffer.toString('base64');
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-    const startRes = await fetch('https://api.domoai.com/v1/video/video2video', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${DOMO_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: model || 'illustration-v20',
-        prompt: 'Family Guy 2D cartoon animation style, thick black outlines, cel shading, vibrant colors, expressive funny face, comedy',
-        video: { bytes_base64_encoded: videoBase64 },
-        seconds: 10
-      })
-    });
+async function domoTransform(videoPath, model) {
+  const videoBuffer = fs.readFileSync(videoPath);
+  const videoBase64 = videoBuffer.toString('base64');
 
-    if (!startRes.ok) {
-      const err = await startRes.json();
-      throw new Error(JSON.stringify(err));
-    }
+  const startRes = await fetch('https://api.domoai.com/v1/video/video2video', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${DOMO_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: model || 'illustration-v20',
+      prompt: 'Family Guy 2D cartoon animation style, thick black outlines, cel shading, vibrant colors, expressive funny face, comedy',
+      video: { bytes_base64_encoded: videoBase64 },
+      seconds: 10
+    })
+  });
 
-    const startData = await startRes.json();
-    console.log('DomoAI start:', JSON.stringify(startData));
-    const taskId = startData.data?.task_id;
-    if (!taskId) throw new Error('Pas de task_id: ' + JSON.stringify(startData));
-    res.json({ task_id: taskId });
-  } catch(e) {
-    console.error('Start error:', e.message);
-    res.status(500).json({ error: e.message });
+  if (!startRes.ok) {
+    const err = await startRes.json();
+    throw new Error('DomoAI start failed: ' + JSON.stringify(err));
   }
-});
 
-app.get('/cartoon/status/:taskId', async (req, res) => {
-  try {
-    const { taskId } = req.params;
+  const startData = await startRes.json();
+  const taskId = startData.data?.task_id;
+  if (!taskId) throw new Error('No task_id: ' + JSON.stringify(startData));
+  console.log('DomoAI task started:', taskId);
+
+  for (let i = 0; i < 60; i++) {
+    await sleep(10000);
     const pollRes = await fetch(`https://api.domoai.com/v1/tasks/${taskId}`, {
       headers: { 'Authorization': `Bearer ${DOMO_KEY}` }
     });
     const pollData = await pollRes.json();
-    console.log('DomoAI status:', pollData.data?.status);
-
-    const state = pollData.data?.status;
-
-    if (state === 'SUCCESS') {
-      const url = pollData.data?.output_videos?.[0]?.url;
-      return res.json({ status: 'done', url });
+    const status = pollData.data?.status;
+    console.log(`DomoAI poll ${i+1}: ${status}`);
+    if (status === 'SUCCESS') {
+      return pollData.data?.output_videos?.[0]?.url;
     }
-    if (state === 'FAILED') {
-      return res.json({ status: 'error', error: 'DomoAI failed' });
-    }
-    return res.json({ status: 'pending' });
-  } catch(e) {
-    console.error('Status error:', e.message);
-    res.status(500).json({ error: e.message });
+    if (status === 'FAILED') throw new Error('DomoAI task failed');
   }
+  throw new Error('DomoAI timeout');
+}
+
+app.post('/cartoon/start', async (req, res) => {
+  const jobId = Date.now().toString();
+  const jobDir = path.join(TMP, jobId);
+  fs.mkdirSync(jobDir);
+
+  res.json({ job_id: jobId });
+
+  // Process in background
+  (async () => {
+    try {
+      const { video_url, model } = req.body;
+      console.log('Starting job:', jobId);
+
+      // Download video
+      const videoRes = await fetch(video_url);
+      const videoBuffer = await videoRes.buffer();
+      const inputPath = path.join(jobDir, 'input.mp4');
+      fs.writeFileSync(inputPath, videoBuffer);
+      console.log('Video downloaded:', videoBuffer.length, 'bytes');
+
+      // Get duration
+      const durationOut = execSync(`ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${inputPath}"`).toString().trim();
+      const duration = parseFloat(durationOut);
+      console.log('Video duration:', duration, 's');
+
+      // Cut into 10s segments
+      const segments = [];
+      const segmentDuration = 9;
+      let start = 0;
+      let segIdx = 0;
+      while (start < duration) {
+        const segPath = path.join(jobDir, `seg_${segIdx}.mp4`);
+        execSync(`ffmpeg -i "${inputPath}" -ss ${start} -t ${segmentDuration} -c:v libx264 -c:a aac -y "${segPath}"`);
+        segments.push(segPath);
+        start += segmentDuration;
+        segIdx++;
+      }
+      console.log('Segments created:', segments.length);
+
+      // Transform each segment
+      const cartoonSegments = [];
+      for (let i = 0; i < segments.length; i++) {
+        console.log(`Transforming segment ${i+1}/${segments.length}`);
+        const cartoonUrl = await domoTransform(segments[i], model);
+        if (!cartoonUrl) throw new Error(`No URL for segment ${i+1}`);
+
+        // Download cartoon segment
+        const cartoonRes = await fetch(cartoonUrl);
+        const cartoonBuf = await cartoonRes.buffer();
+        const cartoonPath = path.join(jobDir, `cartoon_${i}.mp4`);
+        fs.writeFileSync(cartoonPath, cartoonBuf);
+        cartoonSegments.push(cartoonPath);
+        console.log(`Segment ${i+1} done`);
+      }
+
+      // Merge cartoon segments with original audio
+      const listPath = path.join(jobDir, 'list.txt');
+      fs.writeFileSync(listPath, cartoonSegments.map(p => `file '${p}'`).join('\n'));
+      const mergedVideoPath = path.join(jobDir, 'merged_video.mp4');
+      execSync(`ffmpeg -f concat -safe 0 -i "${listPath}" -c copy -y "${mergedVideoPath}"`);
+
+      // Add original audio
+      const finalPath = path.join(jobDir, 'final.mp4');
+      execSync(`ffmpeg -i "${mergedVideoPath}" -i "${inputPath}" -map 0:v -map 1:a -c:v copy -c:a aac -shortest -y "${finalPath}"`);
+
+      // Save result
+      fs.writeFileSync(path.join(jobDir, 'status.json'), JSON.stringify({ status: 'done', path: finalPath }));
+      console.log('Job complete:', jobId);
+    } catch(e) {
+      console.error('Job error:', e.message);
+      fs.writeFileSync(path.join(jobDir, 'status.json'), JSON.stringify({ status: 'error', error: e.message }));
+    }
+  })();
+});
+
+app.get('/cartoon/status/:jobId', async (req, res) => {
+  const { jobId } = req.params;
+  const jobDir = path.join(TMP, jobId);
+  const statusFile = path.join(jobDir, 'status.json');
+
+  if (!fs.existsSync(statusFile)) {
+    return res.json({ status: 'pending' });
+  }
+
+  const statusData = JSON.parse(fs.readFileSync(statusFile));
+  if (statusData.status === 'done') {
+    const videoBuffer = fs.readFileSync(statusData.path);
+    const videoBase64 = videoBuffer.toString('base64');
+    return res.json({ status: 'done', video_base64: videoBase64 });
+  }
+  return res.json(statusData);
 });
 
 app.get('/', (req, res) => res.send('TrendAI Server OK'));
