@@ -53,10 +53,14 @@ app.get('/cartoon/status/:taskId', async (req, res) => {
     });
     const pollData = await pollRes.json();
     console.log('DomoAI poll:', JSON.stringify(pollData));
-    const state = pollData.data?.state;
-    if (state === 'success') return res.json({ status: 'done', url: pollData.data?.output_url });
-    if (state === 'failed') return res.json({ status: 'error', error: 'DomoAI failed' });
-    return res.json({ status: 'pending' });
+    const state = pollData.data?.state || pollData.data?.status;
+console.log('DomoAI state:', state, JSON.stringify(pollData.data?.output_videos));
+if (state === 'success' || state === 'COMPLETED') {
+  const url = pollData.data?.output_url || pollData.data?.output_videos?.[0];
+  return res.json({ status: 'done', url });
+}
+if (state === 'failed' || state === 'FAILED') return res.json({ status: 'error', error: 'DomoAI failed' });
+return res.json({ status: 'pending' });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
