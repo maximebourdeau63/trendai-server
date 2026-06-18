@@ -9,7 +9,8 @@ app.use(express.json({ limit: '100mb' }));
 const DOMO_KEY = process.env.DOMO_API_KEY;
 const PORT = process.env.PORT || 10000;
 
-app.post('/cartoon', async (req, res) => {
+// Lance la transformation et retourne le task_id immédiatement
+app.post('/cartoon/start', async (req, res) => {
   try {
     const { video_base64, model } = req.body;
     const startRes = await fetch('https://api.domoai.com/v1/video/video2video', {
@@ -27,20 +28,35 @@ app.post('/cartoon', async (req, res) => {
       throw new Error(JSON.stringify(err));
     }
     const startData = await startRes.json();
+    console.log('DomoAI start:', JSON.stringify(startData));
     const taskId = startData.data?.task_id;
-    for (let i = 0; i < 30; i++) {
-      await new Promise(r => setTimeout(r, 5000));
-      const pollRes = await fetch(`https://api.domoai.com/v1/task?task_id=${taskId}`, {
-        headers: { 'Authorization': `Bearer ${DOMO_KEY}` }
-      });
-      const pollData = await pollRes.json();
-      console.log('DomoAI status:', pollData.data?.state);
-      if (pollData.data?.state === 'success') return res.json({ url: pollData.data?.output_url });
-      if (pollData.data?.state === 'failed') throw new Error('DomoAI failed: ' + JSON.stringify(pollData));
-    }
-    throw new Error('Timeout');
+    if (!taskId) throw new Error('Pas de task_id: ' + JSON.stringify(startData));
+    res.json({ task_id: taskId });
   } catch(e) {
-    console.error('Cartoon error:', e.message);
+    console.error('Start error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Vérifie le statut d'une tâche
+app.get('/cartoon/status/:taskId', async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const pollRes = await fetch(`https://api.domoai.com/v1/task?task_id=${taskId}`, {
+      headers: { 'Authorization': `Bearer ${DOMO_KEY}` }
+    });
+    const pollData = await pollRes.json();
+    console.log('DomoAI poll:', JSON.stringify(pollData));
+    const state = pollData.data?.state;
+    if (state === 'success') {
+      return res.json({ status: 'done', url: pollData.data?.output_url });
+    } else if (state === 'failed') {
+      return res.json({ status: 'error', error: 'DomoAI failed' });
+    } else {
+      return res.json({ status: 'pending' });
+    }
+  } catch(e) {
+    console.error('Status error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
