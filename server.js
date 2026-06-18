@@ -13,7 +13,6 @@ app.post('/cartoon/start', async (req, res) => {
   try {
     const { video_url, model } = req.body;
 
-    // Télécharger la vidéo sur le serveur
     const videoRes = await fetch(video_url);
     const videoBuffer = await videoRes.buffer();
     const videoBase64 = videoBuffer.toString('base64');
@@ -52,16 +51,20 @@ app.get('/cartoon/status/:taskId', async (req, res) => {
       headers: { 'Authorization': `Bearer ${DOMO_KEY}` }
     });
     const pollData = await pollRes.json();
-    console.log('DomoAI poll:', JSON.stringify(pollData));
-    const state = pollData.data?.state || pollData.data?.status;
-console.log('DomoAI state:', state, JSON.stringify(pollData.data?.output_videos));
-if (state === 'success' || state === 'COMPLETED') {
-  const url = pollData.data?.output_url || pollData.data?.output_videos?.[0];
-  return res.json({ status: 'done', url });
-}
-if (state === 'failed' || state === 'FAILED') return res.json({ status: 'error', error: 'DomoAI failed' });
-return res.json({ status: 'pending' });
+    console.log('DomoAI status:', pollData.data?.status);
+
+    const state = pollData.data?.status;
+
+    if (state === 'SUCCESS') {
+      const url = pollData.data?.output_videos?.[0]?.url;
+      return res.json({ status: 'done', url });
+    }
+    if (state === 'FAILED') {
+      return res.json({ status: 'error', error: 'DomoAI failed' });
+    }
+    return res.json({ status: 'pending' });
   } catch(e) {
+    console.error('Status error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
